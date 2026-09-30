@@ -6,7 +6,10 @@ import com.taskmanagement.api.entity.Task;
 import com.taskmanagement.api.entity.TaskStatus;
 import com.taskmanagement.api.exception.TaskNotFoundException;
 import com.taskmanagement.api.mapper.TaskMapper;
+import com.taskmanagement.api.model.User;
 import com.taskmanagement.api.repository.TaskRepository;
+import com.taskmanagement.api.repository.UserRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -14,14 +17,22 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -35,15 +46,22 @@ class TaskServiceTest {
     @Mock
     private TaskMapper taskMapper;
 
+    @Mock
+    private UserRepository userRepository;
+
     @InjectMocks
     private TaskServiceImpl taskService;
 
+    private User testUser;
     private Task task;
     private TaskRequestDto requestDto;
     private TaskResponseDto responseDto;
 
     @BeforeEach
     void setUp() {
+        testUser = new User("testuser", "password123", Set.of("ROLE_USER"));
+        testUser.setId(1L);
+
         task = Task.builder()
                 .id(1L)
                 .title("Complete Day 2")
@@ -51,6 +69,7 @@ class TaskServiceTest {
                 .status(TaskStatus.PENDING)
                 .createdAt(Instant.now())
                 .dueDate(Instant.now().plusSeconds(3600))
+                .owner(testUser)
                 .build();
 
         requestDto = TaskRequestDto.builder()
@@ -68,10 +87,49 @@ class TaskServiceTest {
                 .createdAt(task.getCreatedAt())
                 .dueDate(task.getDueDate())
                 .build();
+
+        Authentication authentication = new UsernamePasswordAuthenticationToken(
+                testUser.getUsername(), null, List.of(new SimpleGrantedAuthority("ROLE_USER"))
+        );
+        SecurityContext securityContext = SecurityContextHolder.createEmptyContext();
+        securityContext.setAuthentication(authentication);
+        SecurityContextHolder.setContext(securityContext);
+
+        lenient().when(userRepository.findByUsername(testUser.getUsername()))
+                .thenReturn(Optional.of(testUser));
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
     }
 
     @Test
-    @DisplayName("createTask should map DTO, save entity and return response DTO")
+    @DisplayName("Fail-closed: clearing SecurityContextHolder causes getAllTasks() and getTaskById() to throw AccessDeniedException without returning data")
+    void unauthenticatedCalls_ThrowAccessDeniedException_FailClosed() {
+        // Clear security context to simulate an unauthenticated caller reaching the service directly
+        SecurityContextHolder.clearContext();
+
+        // 1. Confirm getAllTasks() throws AccessDeniedException and never calls repository findAll()
+        assertThatThrownBy(() -> taskService.getAllTasks())
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("No authenticated user found");
+
+        verify(taskRepository, never()).findAll();
+        verify(taskRepository, never()).findAllByOwner(any());
+
+        // 2. Confirm getTaskById() throws AccessDeniedException without returning data
+        when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.getTaskById(1L))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("No authenticated user found");
+
+        verify(taskMapper, never()).toResponseDto(any());
+    }
+
+    @Test
+    @DisplayName("createTask should map DTO, associate authenticated owner, save entity and return response DTO")
     void createTask_Success() {
         when(taskMapper.toEntity(requestDto)).thenReturn(task);
         when(taskRepository.save(task)).thenReturn(task);
@@ -82,26 +140,53 @@ class TaskServiceTest {
         assertThat(result).isNotNull();
         assertThat(result.getId()).isEqualTo(1L);
         assertThat(result.getTitle()).isEqualTo("Complete Day 2");
+        assertThat(task.getOwner()).isEqualTo(testUser);
         verify(taskMapper).toEntity(requestDto);
         verify(taskRepository).save(task);
         verify(taskMapper).toResponseDto(task);
     }
 
     @Test
-    @DisplayName("getAllTasks should return list of mapped response DTOs")
+    @DisplayName("createTask should throw AccessDeniedException when caller is unauthenticated (fail-closed)")
+    void createTask_Unauthenticated_ThrowsAccessDeniedException() {
+        SecurityContextHolder.clearContext();
+
+        assertThatThrownBy(() -> taskService.createTask(requestDto))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("No authenticated user found");
+
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("getAllTasks should return list of mapped response DTOs for authenticated user")
     void getAllTasks_Success() {
-        when(taskRepository.findAll()).thenReturn(List.of(task));
+        when(taskRepository.findAllByOwner(testUser)).thenReturn(List.of(task));
         when(taskMapper.toResponseDto(task)).thenReturn(responseDto);
 
         List<TaskResponseDto> result = taskService.getAllTasks();
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).getTitle()).isEqualTo("Complete Day 2");
-        verify(taskRepository).findAll();
+        verify(taskRepository).findAllByOwner(testUser);
+        verify(taskRepository, never()).findAll();
     }
 
     @Test
-    @DisplayName("getTaskById should return task when found")
+    @DisplayName("getAllTasks should throw AccessDeniedException when caller is unauthenticated (fail-closed)")
+    void getAllTasks_Unauthenticated_ThrowsAccessDeniedException() {
+        SecurityContextHolder.clearContext();
+
+        assertThatThrownBy(() -> taskService.getAllTasks())
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("No authenticated user found");
+
+        verify(taskRepository, never()).findAll();
+        verify(taskRepository, never()).findAllByOwner(any());
+    }
+
+    @Test
+    @DisplayName("getTaskById should return task when found and owned by caller")
     void getTaskById_Found() {
         when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
         when(taskMapper.toResponseDto(task)).thenReturn(responseDto);
@@ -111,6 +196,53 @@ class TaskServiceTest {
         assertThat(result).isNotNull();
         assertThat(result.getId()).isEqualTo(1L);
         verify(taskRepository).findById(1L);
+    }
+
+    @Test
+    @DisplayName("getTaskById should throw AccessDeniedException when caller is unauthenticated (fail-closed)")
+    void getTaskById_Unauthenticated_ThrowsAccessDeniedException() {
+        SecurityContextHolder.clearContext();
+        when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.getTaskById(1L))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("No authenticated user found");
+
+        verify(taskMapper, never()).toResponseDto(any());
+    }
+
+    @Test
+    @DisplayName("getTaskById should throw AccessDeniedException when task belongs to another user")
+    void getTaskById_NotOwner_ThrowsAccessDeniedException() {
+        User otherUser = new User("otherUser", "password", Set.of("ROLE_USER"));
+        otherUser.setId(2L);
+        Task otherUserTask = Task.builder()
+                .id(2L)
+                .title("Other Task")
+                .owner(otherUser)
+                .build();
+
+        when(taskRepository.findById(2L)).thenReturn(Optional.of(otherUserTask));
+
+        assertThatThrownBy(() -> taskService.getTaskById(2L))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("You do not have permission to access or modify this task");
+    }
+
+    @Test
+    @DisplayName("getTaskById should throw AccessDeniedException when task has no owner")
+    void getTaskById_TaskHasNoOwner_ThrowsAccessDeniedException() {
+        Task unownedTask = Task.builder()
+                .id(3L)
+                .title("Unowned Task")
+                .owner(null)
+                .build();
+
+        when(taskRepository.findById(3L)).thenReturn(Optional.of(unownedTask));
+
+        assertThatThrownBy(() -> taskService.getTaskById(3L))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("You do not have permission to access or modify this task");
     }
 
     @Test
@@ -140,6 +272,7 @@ class TaskServiceTest {
                 .title("Updated Title")
                 .description("Updated Description")
                 .status(TaskStatus.IN_PROGRESS)
+                .owner(testUser)
                 .build();
 
         TaskResponseDto updatedResponse = TaskResponseDto.builder()
@@ -163,6 +296,39 @@ class TaskServiceTest {
     }
 
     @Test
+    @DisplayName("updateTask should throw AccessDeniedException when caller is unauthenticated (fail-closed)")
+    void updateTask_Unauthenticated_ThrowsAccessDeniedException() {
+        SecurityContextHolder.clearContext();
+        when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.updateTask(1L, requestDto))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("No authenticated user found");
+
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("updateTask should throw AccessDeniedException when task belongs to another user")
+    void updateTask_NotOwner_ThrowsAccessDeniedException() {
+        User otherUser = new User("otherUser", "password", Set.of("ROLE_USER"));
+        otherUser.setId(2L);
+        Task otherUserTask = Task.builder()
+                .id(2L)
+                .title("Other Task")
+                .owner(otherUser)
+                .build();
+
+        when(taskRepository.findById(2L)).thenReturn(Optional.of(otherUserTask));
+
+        assertThatThrownBy(() -> taskService.updateTask(2L, requestDto))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("You do not have permission to access or modify this task");
+
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("updateTask should throw TaskNotFoundException when task not found")
     void updateTask_NotFound() {
         when(taskRepository.findById(99L)).thenReturn(Optional.empty());
@@ -176,7 +342,7 @@ class TaskServiceTest {
     }
 
     @Test
-    @DisplayName("deleteTask should delete entity when exists")
+    @DisplayName("deleteTask should delete entity when exists and owned by caller")
     void deleteTask_Found() {
         when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
 
@@ -184,6 +350,39 @@ class TaskServiceTest {
 
         verify(taskRepository).findById(1L);
         verify(taskRepository).delete(task);
+    }
+
+    @Test
+    @DisplayName("deleteTask should throw AccessDeniedException when caller is unauthenticated (fail-closed)")
+    void deleteTask_Unauthenticated_ThrowsAccessDeniedException() {
+        SecurityContextHolder.clearContext();
+        when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.deleteTask(1L))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("No authenticated user found");
+
+        verify(taskRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("deleteTask should throw AccessDeniedException when task belongs to another user")
+    void deleteTask_NotOwner_ThrowsAccessDeniedException() {
+        User otherUser = new User("otherUser", "password", Set.of("ROLE_USER"));
+        otherUser.setId(2L);
+        Task otherUserTask = Task.builder()
+                .id(2L)
+                .title("Other Task")
+                .owner(otherUser)
+                .build();
+
+        when(taskRepository.findById(2L)).thenReturn(Optional.of(otherUserTask));
+
+        assertThatThrownBy(() -> taskService.deleteTask(2L))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("You do not have permission to access or modify this task");
+
+        verify(taskRepository, never()).delete(any());
     }
 
     @Test
@@ -197,5 +396,15 @@ class TaskServiceTest {
 
         verify(taskRepository).findById(99L);
         verify(taskRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("getCurrentAuthenticatedUser should throw AccessDeniedException when authenticated username is not in database")
+    void getCurrentAuthenticatedUser_UserNotFoundInDb_ThrowsAccessDeniedException() {
+        when(userRepository.findByUsername(testUser.getUsername())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> taskService.getAllTasks())
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("No authenticated user found");
     }
 }

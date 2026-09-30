@@ -18,10 +18,14 @@ import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.context.SecurityContextHolder;
+
 import java.time.Instant;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -52,6 +56,9 @@ class TaskOwnershipIntegrationTest {
 
     @Autowired
     private JwtService jwtService;
+
+    @Autowired
+    private com.taskmanagement.api.service.TaskService taskService;
 
     private User userA;
     private User userB;
@@ -204,5 +211,31 @@ class TaskOwnershipIntegrationTest {
                 .andExpect(status().isNoContent());
 
         assertThat(taskRepository.existsById(userBTask.getId())).isFalse();
+    }
+
+    @Test
+    @DisplayName("Direct service calls without authentication fail closed with AccessDeniedException")
+    void unauthenticatedServiceCall_FailsClosed() {
+        SecurityContextHolder.clearContext();
+
+        assertThatThrownBy(() -> taskService.getAllTasks())
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("No authenticated user found");
+
+        assertThatThrownBy(() -> taskService.createTask(TaskRequestDto.builder().title("Unauthenticated").build()))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("No authenticated user found");
+
+        assertThatThrownBy(() -> taskService.getTaskById(userBTask.getId()))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("No authenticated user found");
+
+        assertThatThrownBy(() -> taskService.updateTask(userBTask.getId(), TaskRequestDto.builder().title("Hacked").build()))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("No authenticated user found");
+
+        assertThatThrownBy(() -> taskService.deleteTask(userBTask.getId()))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("No authenticated user found");
     }
 }

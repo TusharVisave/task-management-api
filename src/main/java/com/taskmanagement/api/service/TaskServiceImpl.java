@@ -29,11 +29,9 @@ public class TaskServiceImpl implements TaskService {
     @Override
     @Transactional
     public TaskResponseDto createTask(TaskRequestDto requestDto) {
-        Task task = taskMapper.toEntity(requestDto);
         User currentUser = getCurrentAuthenticatedUser();
-        if (currentUser != null) {
-            task.setOwner(currentUser);
-        }
+        Task task = taskMapper.toEntity(requestDto);
+        task.setOwner(currentUser);
         Task savedTask = taskRepository.save(task);
         return taskMapper.toResponseDto(savedTask);
     }
@@ -41,9 +39,7 @@ public class TaskServiceImpl implements TaskService {
     @Override
     public List<TaskResponseDto> getAllTasks() {
         User currentUser = getCurrentAuthenticatedUser();
-        List<Task> tasks = (currentUser != null)
-                ? taskRepository.findAllByOwner(currentUser)
-                : taskRepository.findAll();
+        List<Task> tasks = taskRepository.findAllByOwner(currentUser);
 
         return tasks.stream()
                 .map(taskMapper::toResponseDto)
@@ -81,17 +77,16 @@ public class TaskServiceImpl implements TaskService {
     private User getCurrentAuthenticatedUser() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || !authentication.isAuthenticated() || "anonymousUser".equals(authentication.getPrincipal())) {
-            return null;
+            throw new AccessDeniedException("No authenticated user found");
         }
-        return userRepository.findByUsername(authentication.getName()).orElse(null);
+        return userRepository.findByUsername(authentication.getName())
+                .orElseThrow(() -> new AccessDeniedException("No authenticated user found"));
     }
 
     private void checkOwnership(Task task) {
         User currentUser = getCurrentAuthenticatedUser();
-        if (currentUser != null && task.getOwner() != null) {
-            if (!task.getOwner().getId().equals(currentUser.getId())) {
-                throw new AccessDeniedException("You do not have permission to access or modify this task");
-            }
+        if (task.getOwner() == null || !task.getOwner().getId().equals(currentUser.getId())) {
+            throw new AccessDeniedException("You do not have permission to access or modify this task");
         }
     }
 }
