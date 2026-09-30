@@ -17,6 +17,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 import static org.hamcrest.Matchers.hasSize;
@@ -30,7 +31,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -46,6 +46,10 @@ class TaskControllerTest {
 
     @MockitoBean
     private TaskService taskService;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Happy-path CRUD tests
+    // ─────────────────────────────────────────────────────────────────────────
 
     @Test
     @DisplayName("POST /tasks should return 201 Created and response DTO")
@@ -76,22 +80,6 @@ class TaskControllerTest {
                 .andExpect(jsonPath("$.title", is("Learn DTOs")))
                 .andExpect(jsonPath("$.status", is("PENDING")))
                 .andExpect(jsonPath("$.description", is("Understand why entities should not be returned directly")));
-    }
-
-    @Test
-    @DisplayName("POST /tasks with blank title should return 400 Bad Request")
-    void createTask_BlankTitle_Returns400() throws Exception {
-        TaskRequestDto invalidRequest = TaskRequestDto.builder()
-                .title("")
-                .description("No title provided")
-                .build();
-
-        mockMvc.perform(post("/tasks")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(invalidRequest)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.status", is(400)))
-                .andExpect(jsonPath("$.validationErrors.title").exists());
     }
 
     @Test
@@ -204,4 +192,113 @@ class TaskControllerTest {
                 .andExpect(jsonPath("$.status", is(404)))
                 .andExpect(jsonPath("$.message", is("Task not found with id: 999")));
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Validation tests – 400 Bad Request scenarios
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("POST /tasks with blank title should return 400 with validation error")
+    void createTask_BlankTitle_Returns400() throws Exception {
+        TaskRequestDto invalidRequest = TaskRequestDto.builder()
+                .title("")
+                .description("No title provided")
+                .build();
+
+        mockMvc.perform(post("/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(invalidRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status", is(400)))
+                .andExpect(jsonPath("$.error", is("Bad Request")))
+                .andExpect(jsonPath("$.message", is("Validation failed")))
+                .andExpect(jsonPath("$.validationErrors.title", is("Title cannot be blank")));
+    }
+
+    @Test
+    @DisplayName("POST /tasks with null title should return 400 with validation error")
+    void createTask_NullTitle_Returns400() throws Exception {
+        // Sending a body with no title field at all
+        String body = "{\"description\":\"missing title\"}";
+
+        mockMvc.perform(post("/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status", is(400)))
+                .andExpect(jsonPath("$.error", is("Bad Request")))
+                .andExpect(jsonPath("$.message", is("Validation failed")))
+                .andExpect(jsonPath("$.validationErrors.title").exists());
+    }
+
+    @Test
+    @DisplayName("POST /tasks with title exceeding 200 chars should return 400 with validation error")
+    void createTask_TitleTooLong_Returns400() throws Exception {
+        String longTitle = "A".repeat(201);
+        TaskRequestDto invalidRequest = TaskRequestDto.builder()
+                .title(longTitle)
+                .build();
+
+        mockMvc.perform(post("/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(invalidRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status", is(400)))
+                .andExpect(jsonPath("$.error", is("Bad Request")))
+                .andExpect(jsonPath("$.message", is("Validation failed")))
+                .andExpect(jsonPath("$.validationErrors.title",
+                        is("Title must not exceed 200 characters")));
+    }
+
+    @Test
+    @DisplayName("POST /tasks with past due date should return 400 with validation error")
+    void createTask_PastDueDate_Returns400() throws Exception {
+        Instant pastDate = Instant.now().minus(1, ChronoUnit.DAYS);
+        TaskRequestDto invalidRequest = TaskRequestDto.builder()
+                .title("Valid Title")
+                .dueDate(pastDate)
+                .build();
+
+        mockMvc.perform(post("/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(invalidRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status", is(400)))
+                .andExpect(jsonPath("$.error", is("Bad Request")))
+                .andExpect(jsonPath("$.message", is("Validation failed")))
+                .andExpect(jsonPath("$.validationErrors.dueDate",
+                        is("Due date must be today or in the future")));
+    }
+
+    @Test
+    @DisplayName("POST /tasks with malformed JSON should return 400 with readable message")
+    void createTask_MalformedJson_Returns400() throws Exception {
+        String malformedJson = "{ title: not valid json }";
+
+        mockMvc.perform(post("/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(malformedJson))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status", is(400)))
+                .andExpect(jsonPath("$.error", is("Bad Request")))
+                .andExpect(jsonPath("$.message", is("Malformed JSON request body")));
+    }
+
+    @Test
+    @DisplayName("PUT /tasks/{id} with blank title should return 400 with validation error")
+    void updateTask_BlankTitle_Returns400() throws Exception {
+        TaskRequestDto invalidRequest = TaskRequestDto.builder()
+                .title("  ")
+                .build();
+
+        mockMvc.perform(put("/tasks/1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(invalidRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status", is(400)))
+                .andExpect(jsonPath("$.error", is("Bad Request")))
+                .andExpect(jsonPath("$.message", is("Validation failed")))
+                .andExpect(jsonPath("$.validationErrors.title", is("Title cannot be blank")));
+    }
 }
+
