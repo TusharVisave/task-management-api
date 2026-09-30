@@ -73,4 +73,42 @@ class AuthControllerIntegrationTest {
                 .andExpect(jsonPath("$.status").value(409))
                 .andExpect(jsonPath("$.message").value("Username already exists"));
     }
+
+    @Test
+    void login_successful_returnsJwtToken() throws Exception {
+        userRepository.save(new User("charlie", passwordEncoder.encode("secretPass"), Set.of("ROLE_USER")));
+
+        com.taskmanagement.api.dto.LoginRequest request = new com.taskmanagement.api.dto.LoginRequest("charlie", "secretPass");
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.token").isString())
+                .andExpect(jsonPath("$.type").value("Bearer"))
+                .andExpect(jsonPath("$.username").value("charlie"));
+    }
+
+    @Test
+    void login_wrongPassword_returns401() throws Exception {
+        userRepository.save(new User("charlie", passwordEncoder.encode("secretPass"), Set.of("ROLE_USER")));
+
+        com.taskmanagement.api.dto.LoginRequest request = new com.taskmanagement.api.dto.LoginRequest("charlie", "wrongPass");
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.message").value("Invalid username or password"));
+    }
+
+    @Test
+    void login_userNotFound_returns401() throws Exception {
+        com.taskmanagement.api.dto.LoginRequest request = new com.taskmanagement.api.dto.LoginRequest("nonexistent", "somePass");
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.message").value("Invalid username or password"));
+    }
 }

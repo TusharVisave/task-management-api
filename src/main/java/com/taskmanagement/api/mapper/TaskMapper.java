@@ -32,6 +32,7 @@ public class TaskMapper {
                 .status(entity.getStatus())
                 .createdAt(entity.getCreatedAt())
                 .dueDate(entity.getDueDate())
+                .ownerUsername(entity.getOwner() != null ? entity.getOwner().getUsername() : null)
                 .build();
     }
 

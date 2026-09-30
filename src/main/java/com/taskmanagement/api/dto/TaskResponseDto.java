@@ -22,4 +22,5 @@ public class TaskResponseDto {
     private TaskStatus status;
     private Instant createdAt;
     private Instant dueDate;
+    private String ownerUsername;
 }

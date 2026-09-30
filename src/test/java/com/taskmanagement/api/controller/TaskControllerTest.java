@@ -33,9 +33,26 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import com.taskmanagement.api.config.SecurityConfig;
+import com.taskmanagement.api.security.JwtAccessDeniedHandler;
+import com.taskmanagement.api.security.JwtAuthenticationEntryPoint;
+import com.taskmanagement.api.security.JwtAuthenticationFilter;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.FilterType;
 
-@WebMvcTest(TaskController.class)
+@WebMvcTest(
+        controllers = TaskController.class,
+        excludeFilters = @ComponentScan.Filter(
+                type = FilterType.ASSIGNABLE_TYPE,
+                classes = {
+                        SecurityConfig.class,
+                        JwtAuthenticationFilter.class,
+                        JwtAuthenticationEntryPoint.class,
+                        JwtAccessDeniedHandler.class
+                }
+        )
+)
 @AutoConfigureMockMvc(addFilters = false)
 @Import(GlobalExceptionHandler.class)
 class TaskControllerTest {
