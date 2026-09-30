@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
@@ -167,4 +168,43 @@ class TaskIntegrationTest {
                 .andExpect(jsonPath("$.status", is(400)))
                 .andExpect(jsonPath("$.validationErrors.title", is("Title cannot be blank")));
     }
+
+    @Test
+    @DisplayName("POST /tasks returns 400 when due date is in the past")
+    void createTaskWithPastDueDate_Returns400() throws Exception {
+        Instant pastDate = Instant.now().minus(1, ChronoUnit.DAYS);
+        TaskRequestDto invalidRequest = TaskRequestDto.builder()
+                .title("Valid Title")
+                .dueDate(pastDate)
+                .build();
+
+        mockMvc.perform(post("/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(invalidRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status", is(400)))
+                .andExpect(jsonPath("$.error", is("Bad Request")))
+                .andExpect(jsonPath("$.message", is("Validation failed")))
+                .andExpect(jsonPath("$.validationErrors.dueDate",
+                        is("Due date must be today or in the future")));
+    }
+
+    @Test
+    @DisplayName("POST /tasks returns 400 when title exceeds 200 characters")
+    void createTaskWithTitleTooLong_Returns400() throws Exception {
+        TaskRequestDto invalidRequest = TaskRequestDto.builder()
+                .title("X".repeat(201))
+                .build();
+
+        mockMvc.perform(post("/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(invalidRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status", is(400)))
+                .andExpect(jsonPath("$.error", is("Bad Request")))
+                .andExpect(jsonPath("$.message", is("Validation failed")))
+                .andExpect(jsonPath("$.validationErrors.title",
+                        is("Title must not exceed 200 characters")));
+    }
 }
+
